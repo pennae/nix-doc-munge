@@ -9,7 +9,97 @@ use rnix::{
 use tempfile::tempdir;
 use threadpool::ThreadPool;
 
-const THREADS: usize = 24;
+struct StatusReportData {
+    files: usize,
+    items: usize,
+    total_files: usize,
+    total_items: usize,
+    changed_items: usize,
+    last_file: String,
+    last_item: String,
+}
+
+impl StatusReportData {
+    fn print(&self, clear: bool) {
+        if clear {
+            print!("\x1b[1F\x1b[2K\x1b[1F\x1b[2K");
+        }
+        println!("{}/{} files ({})", self.files, self.total_files, self.last_file);
+        println!("{}/{} ({}) items ({})", self.items, self.total_items,
+                 self.changed_items, self.last_item);
+    }
+}
+
+struct StatusReport(Mutex<StatusReportData>);
+
+impl StatusReport {
+    fn new(total_files: usize, total_items: usize) -> Self {
+        Self(Mutex::new(StatusReportData {
+            files: 0,
+            items: 0,
+            total_files,
+            total_items,
+            changed_items: 0,
+            last_file: "".to_string(),
+            last_item: "".to_string(),
+        }))
+    }
+
+    fn enter_file(&self, f: &str) {
+        let mut m = self.0.lock().unwrap();
+        m.files += 1;
+        m.last_file = f.to_string();
+        m.print(m.files > 1 || m.items >= 1);
+    }
+
+    fn enter_item(&self, i: String) {
+        let mut m = self.0.lock().unwrap();
+        m.items += 1;
+        m.last_item = i;
+        m.print(m.files >= 1 || m.items > 1);
+    }
+
+    fn update_item(&self, i: String) {
+        let mut m = self.0.lock().unwrap();
+        m.last_item = i;
+        m.print(true);
+    }
+
+    fn changed_item(&self) {
+        let mut m = self.0.lock().unwrap();
+        m.changed_items += 1;
+        m.print(true);
+    }
+
+    fn skip_items(&self, i: usize) {
+        let mut m = self.0.lock().unwrap();
+        m.items += i;
+        m.print(m.files >= 1 || m.items >= 1);
+    }
+}
+
+struct StatusPart<'a>(&'a StatusReport, usize);
+
+impl<'a> StatusPart<'a> {
+    fn enter_item(&mut self, i: String) {
+        self.0.enter_item(i);
+        self.1 -= 1;
+    }
+
+    fn update_item(&mut self, i: String) {
+        self.0.update_item(i);
+    }
+
+    fn changed_item(&mut self) {
+        self.0.changed_item();
+    }
+}
+
+impl<'a> Drop for StatusPart<'a> {
+    fn drop(&mut self) {
+        self.0.skip_items(self.1);
+    }
+}
 
 fn is_call_to(n: SyntaxNode, f: &str) -> bool {
     let tgt = match Apply::cast(n) {
@@ -232,14 +322,15 @@ fn build_manual(replace: Option<(&str, &str)>) -> Result<String> {
     if !result.status.success() {
         bail!("build failed: {}", String::from_utf8_lossy(&result.stderr));
     }
+    // Ok(fs::read_to_string(format!("{f}/share/doc/nixos/options.json"))?)
     Ok(fs::read_to_string(f)?)
 }
 
-fn convert_file(file: &str, live: bool) -> Result<String> {
-    println!("  find change locations in {file}");
+fn convert_file(file: &str, live: bool, p: &StatusReport) -> Result<String> {
     let mut content = fs::read_to_string(file)?;
     let initial_content = content.clone();
     let candidates = find_candidates(&content);
+    let mut p = StatusPart(p, candidates.len());
     if candidates.is_empty() {
         return Ok(content);
     }
@@ -251,20 +342,21 @@ fn convert_file(file: &str, live: bool) -> Result<String> {
         format!("{}/mod", tmp.path().to_str().unwrap())
     };
 
-    println!("    build old {file}");
+    p.update_item(format!("old in {file}"));
     fs::write(&f, initial_content.as_bytes())?;
     let old = build_manual(Some((file, &f)))?;
 
     for (i, range) in candidates.iter().enumerate() {
         let (test, change) = convert_one(&content, *range);
-        println!("    build change for {i}/{} in {file}", candidates.len());
+        p.enter_item(format!("check {}/{} in {file}", i + 1, candidates.len()));
         fs::write(&f, change.as_bytes())?;
         if let Ok(changed) = build_manual(Some((file, &f))) {
             if old == changed {
-                println!("    build test for {i}/{} in {file}", candidates.len());
+                p.update_item(format!("test {}/{} in {file}", i + 1, candidates.len()));
                 fs::write(&f, test.as_bytes())?;
                 if let Ok(tested) = build_manual(Some((file, &f))) {
                     if old != tested {
+                        p.changed_item();
                         content = change;
                     }
                 }
@@ -282,15 +374,23 @@ fn main() -> Result<()> {
         _ => (1, false),
     };
 
-    let pool = ThreadPool::new(if live { 1 } else { THREADS });
+    let pool = ThreadPool::new(if live { 1 } else { 16 });
     let changes = Arc::new(Mutex::new(vec![]));
 
-    for (i, file) in env::args().skip(skip).enumerate() {
+    let total_items = env::args().skip(skip).map(|file| {
+        let content = fs::read_to_string(file)?;
+        let candidates = find_candidates(&content);
+        Ok(candidates.len())
+    }).sum::<Result<usize>>()?;
+
+    let printer = Arc::new(StatusReport::new(env::args().count() - skip, total_items));
+
+    for file in env::args().skip(skip) {
         pool.execute({
-            let changes = Arc::clone(&changes);
+            let (changes, printer) = (Arc::clone(&changes), Arc::clone(&printer));
             move || {
-                println!("check {file} ({i} of {})", env::args().count() - 1);
-                let new = convert_file(&file, live).unwrap();
+                printer.enter_file(&file);
+                let new = convert_file(&file, live, &printer).unwrap();
                 changes.lock().unwrap().push((file, new));
             }
         });
