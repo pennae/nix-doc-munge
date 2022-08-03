@@ -132,6 +132,16 @@ fn convert_one(s: &str, pos: TextRange) -> (String, String) {
         .dot_matches_new_line(true)
         .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("", "[$2]($1)", ""));
+    let new_chunk = RegexBuilder::new(r#"<xref linkend="(.+?)" ?/>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, SurroundPat("[](#", "$1", ")"));
+    let new_chunk = RegexBuilder::new(r#"<link linkend="(.+?)">(.*?)</link>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, SurroundPat("", "[$2](#$1)", ""));
     // let new_chunk = RegexBuilder::new(r#"<package>([^`]*?)</package>"#)
     //     .multi_line(true)
     //     .dot_matches_new_line(true)
@@ -142,6 +152,11 @@ fn convert_one(s: &str, pos: TextRange) -> (String, String) {
         .dot_matches_new_line(true)
         .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("*", "$1", "*"));
+    let new_chunk = RegexBuilder::new(r#"<emphasis role="string">([^*]*?)</emphasis>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, SurroundPat("**", "$1", "**"));
     let new_chunk = RegexBuilder::new(r#"
             <citerefentry>\s*
                 <refentrytitle>\s*(.*?)\s*</refentrytitle>\s*
