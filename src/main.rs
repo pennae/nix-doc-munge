@@ -87,7 +87,7 @@ impl Replacer for SurroundPat {
     }
 }
 
-fn convert_one(s: &str, pos: TextRange) -> Option<(String, String)> {
+fn convert_one(s: &str, pos: TextRange) -> (String, String) {
     let prefix = &s[.. pos.start().into()];
     let chunk = &s[pos.start().into() .. pos.end().into()];
     let suffix = &s[usize::from(pos.end()) ..];
@@ -95,52 +95,52 @@ fn convert_one(s: &str, pos: TextRange) -> Option<(String, String)> {
     let new_chunk = RegexBuilder::new(r#"<literal>([^`]*?)</literal>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
-        .build().ok()?
+        .build().unwrap()
         .replace_all(&chunk, SurroundPat("`", "$1", "`"));
     // let new_chunk = RegexBuilder::new(r#"<replaceable>([^»]*?)</replaceable>"#)
     //     .multi_line(true)
     //     .dot_matches_new_line(true)
-    //     .build().ok()?
+    //     .build().unwrap()
     //     .replace_all(&new_chunk, SurroundPat("«", "$1", "»"));
     let new_chunk = RegexBuilder::new(r#"<filename>([^`]*?)</filename>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
-        .build().ok()?
+        .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("{file}`", "$1", "`"));
     let new_chunk = RegexBuilder::new(r#"<option>([^`]*?)</option>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
-        .build().ok()?
+        .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("{option}`", "$1", "`"));
     // let new_chunk = RegexBuilder::new(r#"<code>([^`]*?)</code>"#)
     //     .multi_line(true)
     //     .dot_matches_new_line(true)
-    //     .build().ok()?
+    //     .build().unwrap()
     //     .replace_all(&new_chunk, SurroundPat("`", "$1", "`"));
     let new_chunk = RegexBuilder::new(r#"<command>([^`]*?)</command>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
-        .build().ok()?
+        .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("{command}`", "$1", "`"));
     let new_chunk = RegexBuilder::new(r#"<link xlink:href="(.+?)" ?/>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
-        .build().ok()?
+        .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("<", "$1", ">"));
     let new_chunk = RegexBuilder::new(r#"<link xlink:href="(.+?)">(.*?)</link>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
-        .build().ok()?
+        .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("", "[$2]($1)", ""));
     // let new_chunk = RegexBuilder::new(r#"<package>([^`]*?)</package>"#)
     //     .multi_line(true)
     //     .dot_matches_new_line(true)
-    //     .build().ok()?
+    //     .build().unwrap()
     //     .replace_all(&new_chunk, SurroundPat("`", "$1", "`"));
     let new_chunk = RegexBuilder::new(r#"<emphasis>([^*]*?)</emphasis>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
-        .build().ok()?
+        .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("*", "$1", "*"));
     let new_chunk = RegexBuilder::new(r#"
             <citerefentry>\s*
@@ -150,16 +150,16 @@ fn convert_one(s: &str, pos: TextRange) -> Option<(String, String)> {
         .multi_line(true)
         .dot_matches_new_line(true)
         .ignore_whitespace(true)
-        .build().ok()?
+        .build().unwrap()
         .replace_all(&new_chunk, "{manpage}`$1($2)`");
 
-    Some((
+    (
         prefix.to_owned() + "\"a\" + (" + chunk + ")" + suffix,
         prefix.to_owned()
             + "lib.mdDoc "
             + &new_chunk
             + suffix,
-    ))
+    )
 }
 
 fn build_manual(replace: Option<(&str, &str)>) -> Result<String> {
@@ -204,17 +204,16 @@ fn convert_file(file: &str) -> Result<String> {
     let old = build_manual(Some((file, &f)))?;
 
     for (i, range) in candidates.iter().enumerate() {
-        if let Some((test, change)) = convert_one(&content, *range) {
-            println!("    build change for {i}/{} in {file}", candidates.len());
-            fs::write(&f, change.as_bytes())?;
-            if let Ok(changed) = build_manual(Some((file, &f))) {
-                if old == changed {
-                    println!("    build test for {i}/{} in {file}", candidates.len());
-                    fs::write(&f, test.as_bytes())?;
-                    if let Ok(tested) = build_manual(Some((file, &f))) {
-                        if old != tested {
-                            content = change;
-                        }
+        let (test, change) = convert_one(&content, *range);
+        println!("    build change for {i}/{} in {file}", candidates.len());
+        fs::write(&f, change.as_bytes())?;
+        if let Ok(changed) = build_manual(Some((file, &f))) {
+            if old == changed {
+                println!("    build test for {i}/{} in {file}", candidates.len());
+                fs::write(&f, test.as_bytes())?;
+                if let Ok(tested) = build_manual(Some((file, &f))) {
+                    if old != tested {
+                        content = change;
                     }
                 }
             }
