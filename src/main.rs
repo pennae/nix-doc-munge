@@ -192,6 +192,7 @@ fn build_manual(replace: Option<(&str, &str)>) -> Result<String> {
                             configuration = {{
                                 # include the overridden module!
                                 documentation.nixos.includeAllModules = true;
+                                documentation.nixos.options.warningsAreErrors = false;
                                 {replace}
                             }};
                         }};
