@@ -181,10 +181,10 @@ fn build_manual(replace: Option<(&str, &str)>) -> Result<String> {
     let tmp = tempdir()?;
     let f = format!("{}/out", tmp.path().to_str().unwrap());
     let replace = match replace {
-        Some((old, new)) => {
-            format!(r#"disabledModules = [ ./{old} ]; imports = [ "{new}" ];"#)
+        Some((old, new)) if old != new => {
+            format!(r#"disabledModules = [ ./{old} ]; imports = [ {new} ];"#)
         },
-        None => "".to_string(),
+        _ => "".to_string(),
     };
     let result = Command::new("nix-build")
         .args(["-o", &f, "-E"])
@@ -204,19 +204,24 @@ fn build_manual(replace: Option<(&str, &str)>) -> Result<String> {
     Ok(fs::read_to_string(f)?)
 }
 
-fn convert_file(file: &str) -> Result<String> {
+fn convert_file(file: &str, live: bool) -> Result<String> {
     println!("  find change locations in {file}");
     let mut content = fs::read_to_string(file)?;
+    let initial_content = content.clone();
     let candidates = find_candidates(&content);
     if candidates.is_empty() {
         return Ok(content);
     }
 
     let tmp = tempdir()?;
-    let f = format!("{}/mod", tmp.path().to_str().unwrap());
+    let f = if live {
+        file.to_string()
+    } else {
+        format!("{}/mod", tmp.path().to_str().unwrap())
+    };
 
     println!("    build old {file}");
-    fs::write(&f, content.as_bytes())?;
+    fs::write(&f, initial_content.as_bytes())?;
     let old = build_manual(Some((file, &f)))?;
 
     for (i, range) in candidates.iter().enumerate() {
@@ -236,19 +241,25 @@ fn convert_file(file: &str) -> Result<String> {
         }
     }
 
+    fs::write(&f, initial_content.as_bytes())?;
     Ok(content)
 }
 
 fn main() -> Result<()> {
-    let pool = ThreadPool::new(THREADS);
+    let (skip, live) = match env::args().skip(1).next() {
+        Some(s) if s == "--live" => (2, true),
+        _ => (1, false),
+    };
+
+    let pool = ThreadPool::new(if live { 1 } else { THREADS });
     let changes = Arc::new(Mutex::new(vec![]));
 
-    for (i, file) in env::args().skip(1).enumerate() {
+    for (i, file) in env::args().skip(skip).enumerate() {
         pool.execute({
             let changes = Arc::clone(&changes);
             move || {
                 println!("check {file} ({i} of {})", env::args().count() - 1);
-                let new = convert_file(&file).unwrap();
+                let new = convert_file(&file, live).unwrap();
                 changes.lock().unwrap().push((file, new));
             }
         });
