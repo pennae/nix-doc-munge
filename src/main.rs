@@ -3,7 +3,7 @@ use std::{collections::VecDeque, env, fs, process::Command, sync::{Arc, Mutex}};
 use anyhow::{Result, bail};
 use regex::{RegexBuilder, Replacer};
 use rnix::{
-    types::{Apply, AttrSet, EntryHolder, Ident, TokenWrapper, TypedNode, Select},
+    types::{Apply, AttrSet, EntryHolder, Ident, TokenWrapper, TypedNode, Select, KeyValue},
     SyntaxKind, TextRange, SyntaxNode,
 };
 use tempfile::tempdir;
@@ -28,6 +28,23 @@ fn is_call_to(n: SyntaxNode, f: &str) -> bool {
     false
 }
 
+// doesn't need to escape . because we're only interested in single-entry
+// paths anyway
+fn key_string(kv: &KeyValue) -> String {
+    kv.key().map_or_else(
+        || String::new(),
+        |kv| kv.path().map(|p| p.to_string()).collect::<Vec<_>>().join("."))
+}
+
+fn is_visible(attrs: &AttrSet) -> bool {
+    // there's no reason to set these keys if not to hide an item. we'll want
+    // to ignore hidden items because they don't show up in the docs, processing
+    // them only takes time for no changes.
+    attrs.entries().map(|e| key_string(&e)).all(|k| {
+        k != "internal" && k != "visible"
+    })
+}
+
 fn find_candidates(s: &str) -> Vec<TextRange> {
     let ast = rnix::parse(s).as_result().unwrap();
     let mut nodes: VecDeque<_> = [(ast.node(), false)].into();
@@ -45,12 +62,10 @@ fn find_candidates(s: &str) -> Vec<TextRange> {
             SyntaxKind::NODE_ATTR_SET => {
                 let attrs = AttrSet::cast(node.clone()).unwrap();
                 for e in attrs.entries() {
-                    let is_description = e.key().map_or(false, |e| {
-                        e.path().map(|p| p.to_string()).collect::<Vec<_>>().join(".") == "description"
-                    });
-                    if is_description
+                    if key_string(&e) == "description"
                         && parent_is_option
                         && !e.value().map(|v| is_call_to(v, "mdDoc")).unwrap_or(false)
+                        && is_visible(&attrs)
                     {
                         result.push(e.value().unwrap().text_range());
                     }
