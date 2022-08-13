@@ -87,6 +87,17 @@ impl Replacer for SurroundPat {
     }
 }
 
+struct CodePat(&'static str);
+
+impl Replacer for CodePat {
+    fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
+        dst.push_str(self.0);
+        dst.push_str("`");
+        dst.push_str(&caps[1].replace("^gt;", ">").replace("&lt;", "<"));
+        dst.push_str("`");
+    }
+}
+
 fn convert_one(s: &str, pos: TextRange) -> (String, String) {
     let prefix = &s[.. pos.start().into()];
     let chunk = &s[pos.start().into() .. pos.end().into()];
@@ -96,7 +107,7 @@ fn convert_one(s: &str, pos: TextRange) -> (String, String) {
         .multi_line(true)
         .dot_matches_new_line(true)
         .build().unwrap()
-        .replace_all(&chunk, SurroundPat("`", "$1", "`"));
+        .replace_all(&chunk, CodePat(""));
     // let new_chunk = RegexBuilder::new(r#"<replaceable>([^»]*?)</replaceable>"#)
     //     .multi_line(true)
     //     .dot_matches_new_line(true)
@@ -106,12 +117,12 @@ fn convert_one(s: &str, pos: TextRange) -> (String, String) {
         .multi_line(true)
         .dot_matches_new_line(true)
         .build().unwrap()
-        .replace_all(&new_chunk, SurroundPat("{file}`", "$1", "`"));
+        .replace_all(&new_chunk, CodePat("{file}"));
     let new_chunk = RegexBuilder::new(r#"<option>([^`]*?)</option>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
         .build().unwrap()
-        .replace_all(&new_chunk, SurroundPat("{option}`", "$1", "`"));
+        .replace_all(&new_chunk, CodePat("{option}"));
     // let new_chunk = RegexBuilder::new(r#"<code>([^`]*?)</code>"#)
     //     .multi_line(true)
     //     .dot_matches_new_line(true)
@@ -121,7 +132,7 @@ fn convert_one(s: &str, pos: TextRange) -> (String, String) {
         .multi_line(true)
         .dot_matches_new_line(true)
         .build().unwrap()
-        .replace_all(&new_chunk, SurroundPat("{command}`", "$1", "`"));
+        .replace_all(&new_chunk, CodePat("{command}"));
     let new_chunk = RegexBuilder::new(r#"<link xlink:href="(.+?)" ?/>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
