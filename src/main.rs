@@ -193,6 +193,11 @@ fn convert_one(s: &str, pos: TextRange) -> (String, String) {
         .ignore_whitespace(true)
         .build().unwrap()
         .replace_all(&new_chunk, "{manpage}`$1($2)`");
+    let new_chunk = RegexBuilder::new(r#"</?programlisting>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, "```");
 
     (
         prefix.to_owned() + "\"a\" + (" + chunk + ")" + suffix,
