@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, env, fs, process::Command, sync::{Arc, Mutex}};
+use std::{collections::VecDeque, env, fs, process::Command, sync::{Arc, Mutex}, path::Path};
 
 use anyhow::{Result, bail};
 use regex::{RegexBuilder, Replacer};
@@ -298,16 +298,15 @@ fn convert_one(s: &str, pos: TextRange) -> (String, String) {
     )
 }
 
-fn build_manual(replace: Option<(&str, &str)>) -> Result<String> {
+fn build_manual(dir: impl AsRef<Path>, import: Option<&str>) -> Result<String> {
     let tmp = tempdir()?;
     let f = format!("{}/out", tmp.path().to_str().unwrap());
-    let replace = match replace {
-        Some((old, new)) if old != new => {
-            format!(r#"disabledModules = [ ./{old} ]; imports = [ {new} ];"#)
-        },
+    let replace = match import {
+        Some(new) => format!(r#"imports = [ {new} ];"#),
         _ => "".to_string(),
     };
     let result = Command::new("nix-build")
+        .current_dir(dir)
         .args(["-o", &f, "-E"])
         .arg(format!(r#"let sys = import ./nixos/default.nix {{
                             configuration = {{
@@ -326,7 +325,7 @@ fn build_manual(replace: Option<(&str, &str)>) -> Result<String> {
     Ok(fs::read_to_string(f)?)
 }
 
-fn convert_file(file: &str, live: bool, p: &StatusReport) -> Result<String> {
+fn convert_file(file: &str, import: bool, p: &StatusReport) -> Result<String> {
     let mut content = fs::read_to_string(file)?;
     let initial_content = content.clone();
     let candidates = find_candidates(&content);
@@ -336,25 +335,32 @@ fn convert_file(file: &str, live: bool, p: &StatusReport) -> Result<String> {
     }
 
     let tmp = tempdir()?;
-    let f = if live {
-        file.to_string()
-    } else {
-        format!("{}/mod", tmp.path().to_str().unwrap())
+    let result = Command::new("cp")
+        .args(["-at", tmp.path().to_str().unwrap(), "--reflink=always", "."])
+        .output()?;
+    if !result.status.success() {
+        bail!("copy failed: {}", String::from_utf8_lossy(&result.stderr));
+    }
+
+    let f = format!("{}/{file}", tmp.path().to_str().unwrap());
+    let import = match import {
+        true => Some(f.as_str()),
+        false => None,
     };
 
     p.update_item(format!("old in {file}"));
     fs::write(&f, initial_content.as_bytes())?;
-    let old = build_manual(Some((file, &f)))?;
+    let old = build_manual(&tmp, import)?;
 
     for (i, range) in candidates.iter().enumerate() {
         let (test, change) = convert_one(&content, *range);
         p.enter_item(format!("check {}/{} in {file}", i + 1, candidates.len()));
         fs::write(&f, change.as_bytes())?;
-        if let Ok(changed) = build_manual(Some((file, &f))) {
+        if let Ok(changed) = build_manual(&tmp, import) {
             if old == changed {
                 p.update_item(format!("test {}/{} in {file}", i + 1, candidates.len()));
                 fs::write(&f, test.as_bytes())?;
-                if let Ok(tested) = build_manual(Some((file, &f))) {
+                if let Ok(tested) = build_manual(&tmp, import) {
                     if old != tested {
                         p.changed_item();
                         content = change;
@@ -369,12 +375,12 @@ fn convert_file(file: &str, live: bool, p: &StatusReport) -> Result<String> {
 }
 
 fn main() -> Result<()> {
-    let (skip, live) = match env::args().skip(1).next() {
-        Some(s) if s == "--live" => (2, true),
+    let (skip, import) = match env::args().skip(1).next() {
+        Some(s) if s == "--import" => (2, true),
         _ => (1, false),
     };
 
-    let pool = ThreadPool::new(if live { 1 } else { 16 });
+    let pool = ThreadPool::new(16);
     let changes = Arc::new(Mutex::new(vec![]));
 
     let total_items = env::args().skip(skip).map(|file| {
@@ -390,7 +396,7 @@ fn main() -> Result<()> {
             let (changes, printer) = (Arc::clone(&changes), Arc::clone(&printer));
             move || {
                 printer.enter_file(&file);
-                let new = convert_file(&file, live, &printer).unwrap();
+                let new = convert_file(&file, import, &printer).unwrap();
                 changes.lock().unwrap().push((file, new));
             }
         });
