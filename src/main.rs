@@ -3,7 +3,7 @@ use std::{collections::VecDeque, env, fs, process::Command, sync::{Arc, Mutex}, 
 use anyhow::{Result, bail};
 use regex::{RegexBuilder, Replacer};
 use rnix::{
-    types::{Apply, AttrSet, EntryHolder, Ident, TokenWrapper, TypedNode, Select, KeyValue},
+    types::{Apply, AttrSet, EntryHolder, Ident, TokenWrapper, TypedNode, Select, KeyValue, Paren},
     SyntaxKind, TextRange, SyntaxNode,
 };
 use tempfile::tempdir;
@@ -135,7 +135,7 @@ fn is_visible(attrs: &AttrSet) -> bool {
     })
 }
 
-fn find_candidates(s: &str) -> Vec<TextRange> {
+fn find_candidates(s: &str) -> Vec<(TextRange, bool)> {
     let ast = rnix::parse(s).as_result().unwrap();
     let mut nodes: VecDeque<_> = [(ast.node(), false)].into();
     let mut result = vec![];
@@ -145,7 +145,14 @@ fn find_candidates(s: &str) -> Vec<TextRange> {
             SyntaxKind::NODE_APPLY => {
                 let call = Apply::cast(node.clone()).unwrap();
                 if let Some(arg) = call.value() {
-                    nodes.push_back((arg, is_call_to(node.clone(), "mkOption")));
+                    nodes.push_back((arg.clone(), is_call_to(node.clone(), "mkOption")));
+                    if is_call_to(node.clone(), "mkEnableOption")
+                        && Paren::cast(call.value().unwrap()).map_or(true, |p| {
+                            !is_call_to(p.node().first_child().unwrap(), "mdDoc")
+                        })
+                    {
+                        result.push((arg.text_range(), true));
+                    }
                     continue;
                 }
             }
@@ -157,7 +164,7 @@ fn find_candidates(s: &str) -> Vec<TextRange> {
                         && !e.value().map(|v| is_call_to(v, "mdDoc")).unwrap_or(false)
                         && is_visible(&attrs)
                     {
-                        result.push(e.value().unwrap().text_range());
+                        result.push((e.value().unwrap().text_range(), false));
                     }
                 }
             }
@@ -169,7 +176,7 @@ fn find_candidates(s: &str) -> Vec<TextRange> {
         }
     }
 
-    result.sort_by(|a, b| b.start().cmp(&a.start()));
+    result.sort_by(|(a, _), (b, _)| b.start().cmp(&a.start()));
     result
 }
 
@@ -203,7 +210,7 @@ impl Replacer for CodePat {
     }
 }
 
-fn convert_one(s: &str, pos: TextRange) -> (String, String) {
+fn convert_one(s: &str, pos: TextRange, add_parens: bool) -> (String, String) {
     let prefix = &s[.. pos.start().into()];
     let chunk = &s[pos.start().into() .. pos.end().into()];
     let suffix = &s[usize::from(pos.end()) ..];
@@ -289,11 +296,19 @@ fn convert_one(s: &str, pos: TextRange) -> (String, String) {
         .build().unwrap()
         .replace_all(&new_chunk, "```");
 
+    let (lpar, rpar) = if add_parens {
+        ("(", ")")
+    } else {
+        ("", "")
+    };
+
     (
-        prefix.to_owned() + "\"a\" + (" + chunk + ")" + suffix,
+        prefix.to_owned() + lpar + "\"a\" + (" + chunk + ")" + rpar + suffix,
         prefix.to_owned()
+            + lpar
             + "lib.mdDoc "
             + &new_chunk
+            + rpar
             + suffix,
     )
 }
@@ -352,8 +367,8 @@ fn convert_file(file: &str, import: bool, p: &StatusReport) -> Result<String> {
     fs::write(&f, initial_content.as_bytes())?;
     let old = build_manual(&tmp, import)?;
 
-    for (i, range) in candidates.iter().enumerate() {
-        let (test, change) = convert_one(&content, *range);
+    for (i, &(range, add_parens)) in candidates.iter().enumerate() {
+        let (test, change) = convert_one(&content, range, add_parens);
         p.enter_item(format!("check {}/{} in {file}", i + 1, candidates.len()));
         fs::write(&f, change.as_bytes())?;
         if let Ok(changed) = build_manual(&tmp, import) {
