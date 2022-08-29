@@ -185,6 +185,7 @@ fn markdown_escape(s: &str) -> String {
      .replace("*", "\\*")
      .replace("&lt;", "<")
      .replace("&gt;", ">")
+     .replace("&amp;", "&")
 }
 
 struct SurroundPat(&'static str, &'static str, &'static str);
@@ -205,7 +206,7 @@ impl Replacer for CodePat {
     fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
         dst.push_str(self.0);
         dst.push_str("`");
-        dst.push_str(&caps[1].replace("^gt;", ">").replace("&lt;", "<"));
+        dst.push_str(&caps[1].replace("&gt;", ">").replace("&lt;", "<"));
         dst.push_str("`");
     }
 }
@@ -275,7 +276,7 @@ fn convert_one(s: &str, pos: TextRange, add_parens: bool) -> (String, String) {
         .dot_matches_new_line(true)
         .build().unwrap()
         .replace_all(&new_chunk, SurroundPat("*", "$1", "*"));
-    let new_chunk = RegexBuilder::new(r#"<emphasis role="string">([^*]*?)</emphasis>"#)
+    let new_chunk = RegexBuilder::new(r#"<emphasis role="strong">([^*]*?)</emphasis>"#)
         .multi_line(true)
         .dot_matches_new_line(true)
         .build().unwrap()
