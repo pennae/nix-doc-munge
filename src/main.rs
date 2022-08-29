@@ -295,6 +295,16 @@ fn convert_one(s: &str, pos: TextRange, add_parens: bool) -> (String, String) {
         .dot_matches_new_line(true)
         .build().unwrap()
         .replace_all(&new_chunk, "```");
+    let new_chunk = RegexBuilder::new(r#"<varname>([^*]*?)</varname>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, "{var}`$1`");
+    let new_chunk = RegexBuilder::new(r#"<envar>([^*]*?)</envar>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, "{env}`$1`");
 
     let (lpar, rpar) = if add_parens {
         ("(", ")")
