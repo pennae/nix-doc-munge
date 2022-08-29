@@ -306,6 +306,24 @@ fn convert_one(s: &str, pos: TextRange, add_parens: bool) -> (String, String) {
         .dot_matches_new_line(true)
         .build().unwrap()
         .replace_all(&new_chunk, "{env}`$1`");
+    let new_chunk = RegexBuilder::new(
+        r#"^( *)<note>(?:<para>)?(.*?)(?:</para>)?</note>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, "$1::: {.note}\n$1$2\n$1:::");
+    let new_chunk = RegexBuilder::new(
+        r#"^( *)<warning>(?:<para>)?(.*?)(?:</para>)?</warning>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, "$1::: {.warning}\n$1$2\n$1:::");
+    let new_chunk = RegexBuilder::new(
+        r#"^( *)<important>(?:<para>)?(.*?)(?:</para>)?</important>"#)
+        .multi_line(true)
+        .dot_matches_new_line(true)
+        .build().unwrap()
+        .replace_all(&new_chunk, "$1::: {.important}\n$1$2\n$1:::");
 
     let (lpar, rpar) = if add_parens {
         ("(", ")")
